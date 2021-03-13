@@ -1,6 +1,8 @@
 #include <linux/module.h>
 #include <linux/kern_levels.h>
 #include <linux/kallsyms.h>
+#include <linux/slab.h>
+#include <linux/gfp.h>
 //stuff for reading/wrinting on file (via VFS)
 #include <linux/fs.h>
 #include <asm/segment.h>
@@ -23,14 +25,16 @@
 //TODO
 #define NUM_ENTRIES 512
 
+//TODO edit home
+
 //The header file in which the entry will be added
-#define CUSTOM_SYSCALL_TAB "/home/ezio/custom_syscall_indx.h"
+#define CUSTOM_SYSCALL_TAB "%s/custom_syscall_indx.h"
 
 //This file will contain the macros that will be used to call
 //a custom syscall as if it was an 'embedded' one.
 //Eg. sys_call_adder("syscall_name") will be called inside the kernel module
 //that contains the new syscall to add. (TODO automate the process)
-#define CUSTOM_SYSCALL_MACROS "/home/ezio/custom_syscall_macros.h"
+#define CUSTOM_SYSCALL_MACROS "%s/custom_syscall_macros.h"
 
 #define CST_sysc_adder "#define CST_syscal_adder %d"
 #define CST_sysc_remover "#define CST_syscal_remover %d"
@@ -52,6 +56,14 @@ unsigned long sysnisyscall_addr = 0;
 
 //used to avoid ononimous
 char **syscall_names = NULL;
+int **syscall_cts_number = NULL;
+
+
+void update_macro_file(void)
+{
+	//TODO
+	printk(KERN_DEBUG "TODO create_header");
+}
 
 
 int find_syscalltable_free_entry(void)
@@ -70,39 +82,119 @@ int find_syscalltable_free_entry(void)
 	return i;
 }
 
-
-asmlinkage int syscall_adder(void/*void* new_syscall, char *est_entry*/)
+int update_syscalltable_entry(void* custom_syscall)
 {
-	//TODO
-	printk(KERN_DEBUG "TODO adder");
-	return 4;
+	int syst_entry;
+	unsigned long cr0;
+
+	syst_entry = find_syscalltable_free_entry();
+	if(syst_entry == -1){
+		printk(KERN_DEBUG "Free entry not found\n");
+		return -1;
+	}
+	printk(KERN_DEBUG "%s: Index found: %d\n",MODNAME, syst_entry);
+
+	cr0 = read_cr0();
+	write_cr0(cr0 & ~X86_CR0_WP);
+	((void **)sys_call_table_address)[syst_entry] = custom_syscall;
+	write_cr0(cr0);
+
+	return 0;
 }
 
-asmlinkage int syscall_remover(void/*int est_entry*/)
+
+asmlinkage int syscall_adder(void* new_syscall, char *syscall_name, char *cst_entry, int num_parameters)
 {
+
+	//MOD_INC_USE_COUNT;
+
+	char *macro_line_0 = "#DEFINE %s() syscall(%d)";
+	char *macro_line_1 = "#DEFINE %s(arg1) syscall(%d, arg1)";
+	char *macro_line_2 = "#DEFINE %s(arg1, arg2) syscall(%d, arg1, arg2)";
+	char *macro_line_3 = "#DEFINE %s(arg1, arg2, arg3) syscall(%d, arg1, arg2, arg3)";
+	char *macro_line_4 = "#DEFINE %s(arg1, arg2, arg3, arg4) syscall(%d, arg1, arg2, arg3, arg4)";
+	char *macro_line_5 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5) syscall(%d, arg1, arg2, arg3, arg4, arg5)";
+	char *macro_line_6 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5, arg6) syscall(%d, arg1, arg2, arg3, arg4, arg5, arg6)";
+
+	char *macro_line_used = NULL;
+	if((macro_line_used = kmalloc(PAGE_SIZE, GFP_KERNEL)) == NULL){
+		printk(KERN_ERR "%s: Unable to kmalloc\n", MODNAME);
+
+		//MOD_DEC_USE_COUNT;
+		return -1;
+	}
+
+	int ret;
+
+	switch (num_parameters){
+		case 0:
+			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_0, syscall_name, cst_entry);
+			break;
+		case 1:
+			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_1, syscall_name, cst_entry);
+			break;
+		case 2:
+			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_2, syscall_name, cst_entry);
+			break;
+		case 3:
+			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_3, syscall_name, cst_entry);
+			break;
+		case 4:
+			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_4, syscall_name, cst_entry);
+			break;
+		case 5:
+			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_5, syscall_name, cst_entry);
+			break;
+		case 6:
+			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_6, syscall_name, cst_entry);
+			break;
+		default:
+			prink(KERN_ERR "%s: Invalid number parameter (%d)\n", MODNAME, num_parameters);
+			return -1;
+	}
+
+	if(ret <= 0){
+		prink(KERN_ERR "%s: snprintf failed, returning (%d)\n", MODNAME, ret);
+		
+		//MOD_DEC_USE_COUNT;
+		return -1;
+	}
+
+	printk(KERN_DEBUG "%s-> kmalloc+vsnprintf: %s\n", MODNAME, macro_line_used);
+
+	//mutex lock
+
+	//inserting the line in the macro file
+
+	//update local arrays
+
+	//mutex unlock
+
+	kfree(macro_line_used);
+	//MOD_DEC_USE_COUNT;
+
+	return 0;
+}
+
+asmlinkage int syscall_remover(void/*int cst_entry*/)
+{
+	//module get
 	//TODO
 	printk(KERN_DEBUG "TODO remover");
-	return 7;
+
+	//module put
+	return 0;
 }
-
-void create_header(void)
-{
-	//TODO
-	printk(KERN_DEBUG "TODO create_header");
-}
-
-
-
 
 static int __init install(void)
 {
+
 	//TODO create the header file, add the adder entry.
 
 	//when a new syscall has to be added, the header created has to be included,
 	//then call syscall(NR, void* syscall_toadd_definedinmodule), and the new
 	//entry will be inserted.
-	int sys_add_entry, sys_rem_entry;
-	unsigned long cr0;
+	
 
 	sys_call_table_address = kallsyms_lookup_name("sys_call_table");
 
@@ -119,40 +211,20 @@ static int __init install(void)
 	}
 
 	//adding sys adder
-	sys_add_entry = find_syscalltable_free_entry();
-	if(sys_add_entry == -1){
-		printk(KERN_DEBUG "Free entry not found\n");
+	if(update_syscalltable_entry(syscall_adder) == -1){
+		printk(KERN_DEBUG "%s: Syscall_adder not inserted\n", MODNAME);
 		return -1;
 	}
-	printk(KERN_DEBUG "%s: Index found: %d\n",MODNAME, sys_add_entry);
-
-	cr0 = read_cr0();
-	write_cr0(cr0 & ~X86_CR0_WP);
-	((void **)sys_call_table_address)[sys_add_entry] = syscall_adder;
-	write_cr0(cr0);
 
 	//adding sys remover
-	sys_rem_entry = find_syscalltable_free_entry();
-	if(sys_add_entry == -1){
-		printk(KERN_DEBUG "Free entry not found\n");
+	if(update_syscalltable_entry(syscall_remover) == -1){
+		printk(KERN_DEBUG "%s: Syscall_remover not inserted\n", MODNAME);
 		return -1;
 	}
-	printk(KERN_DEBUG "%s: Index found: %d\n",MODNAME, sys_rem_entry);
-
-	if(sys_rem_entry == sys_add_entry){
-		printk(KERN_ERR "%s: The syscall table has NOT been updated\n", MODNAME);
-		return -1;
-	}
-
-	cr0 = read_cr0();
-	write_cr0(cr0 & ~X86_CR0_WP);
-	((void **)sys_call_table_address)[sys_rem_entry] = syscall_remover;
-	write_cr0(cr0);
 
 	//creating file header
-	create_header();
 
-	printk(KERN_DEBUG "%s: syscall_adder & syscall_removeradded correctly\n", MODNAME);
+	printk(KERN_DEBUG "%s: syscall_adder & syscall_remover added correctly\n", MODNAME);
 
 	return 0;
 }
