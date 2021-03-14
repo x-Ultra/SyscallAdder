@@ -1,4 +1,5 @@
 #include <linux/module.h>
+#include <linux/kernel.h>
 #include <linux/kern_levels.h>
 #include <linux/kallsyms.h>
 #include <linux/slab.h>
@@ -19,27 +20,15 @@
 #define X86_CR0_WP 0x00010000
 #endif
 
-
 #define MODNAME "syscall_adder"
-
-//TODO
 #define NUM_ENTRIES 512
-
-//TODO edit home
-
-//The header file in which the entry will be added
-#define CUSTOM_SYSCALL_TAB "%s/custom_syscall_indx.h"
-
 //This file will contain the macros that will be used to call
 //a custom syscall as if it was an 'embedded' one.
 //Eg. sys_call_adder("syscall_name") will be called inside the kernel module
 //that contains the new syscall to add. (TODO automate the process)
-#define CUSTOM_SYSCALL_MACROS "%s/custom_syscall_macros.h"
-
-#define CST_sysc_adder "#define CST_syscal_adder %d"
-#define CST_sysc_remover "#define CST_syscal_remover %d"
-
-#define CST_ENTRY "#define CST_%s %d\n"
+#define CUSTOM_SYSCALL_MACROS "~/custom_syscall_macros.h"
+#define MACRO_SYS_start "#%d"
+#define MACRO_SYS_end "#end"
 
 
 
@@ -55,9 +44,9 @@ unsigned long sys_call_table_address = 0;
 unsigned long sysnisyscall_addr = 0;
 
 //used to avoid ononimous
-char **syscall_names = NULL;
-int **syscall_cts_number = NULL;
-
+char **syscall_names = {[0 ... NUM_ENTRIES] = 0};
+int **syscall_cts_numbers = {[0 ... NUM_ENTRIES] = 0};
+int total_syscall_added = 0;
 
 void update_macro_file(void)
 {
@@ -99,14 +88,17 @@ int update_syscalltable_entry(void* custom_syscall)
 	((void **)sys_call_table_address)[syst_entry] = custom_syscall;
 	write_cr0(cr0);
 
-	return 0;
+	return syst_entry;
 }
 
 
-asmlinkage int syscall_adder(void* new_syscall, char *syscall_name, char *cst_entry, int num_parameters)
+asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sysname_len, int cst_entry, int num_parameters)
 {
-
-	//MOD_INC_USE_COUNT;
+	int ret;
+	//this should be the max length of the macro, but i'm lazy, 1PG should be ok.
+	int DIM = 4096;
+	int SYSCALL_NAME_MAX_LEN = 1024;
+	int customsys_free_indx;
 
 	char *macro_line_0 = "#DEFINE %s() syscall(%d)";
 	char *macro_line_1 = "#DEFINE %s(arg1) syscall(%d, arg1)";
@@ -115,64 +107,111 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name, char *cst_en
 	char *macro_line_4 = "#DEFINE %s(arg1, arg2, arg3, arg4) syscall(%d, arg1, arg2, arg3, arg4)";
 	char *macro_line_5 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5) syscall(%d, arg1, arg2, arg3, arg4, arg5)";
 	char *macro_line_6 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5, arg6) syscall(%d, arg1, arg2, arg3, arg4, arg5, arg6)";
-
 	char *macro_line_used = NULL;
-	if((macro_line_used = kmalloc(PAGE_SIZE, GFP_KERNEL)) == NULL){
-		printk(KERN_ERR "%s: Unable to kmalloc\n", MODNAME);
+	char *syscall_name = NULL;
 
-		//MOD_DEC_USE_COUNT;
+	
+	if(try_module_get(THIS_MODULE) == 0){
+		printk(KERN_ERR "%s: Module in use, try later\n", MODNAME);
+		return -1;
+	}
+	
+
+	if((syscall_name = kmalloc(SYSCALL_NAME_MAX_LEN, GFP_KERNEL)) == NULL){
+		printk(KERN_ERR "%s: Unable to kmalloc syscall_name\n", MODNAME);
+
+		module_put(THIS_MODULE);
 		return -1;
 	}
 
-	int ret;
+	if(copy_from_user(syscall_name, syscall_name_user, sysname_len) != 0){
+		printk(KERN_ERR "%s: Unable to strncopy_from_user syscall_name\n", MODNAME);
+
+		module_put(THIS_MODULE);
+		return -1;
+	}
+	syscall_name[sysname_len] = '\0';
+
+	if((macro_line_used = kmalloc(DIM, GFP_KERNEL)) == NULL){
+		printk(KERN_ERR "%s: Unable to kmalloc\n", MODNAME);
+
+		module_put(THIS_MODULE);
+		kfree(syscall_name);
+		return -1;
+	}
 
 	switch (num_parameters){
 		case 0:
-			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_0, syscall_name, cst_entry);
+			ret = snprintf(macro_line_used, DIM,  macro_line_0, syscall_name, cst_entry);
 			break;
 		case 1:
-			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_1, syscall_name, cst_entry);
+			ret = snprintf(macro_line_used, DIM, macro_line_1, syscall_name, cst_entry);
 			break;
 		case 2:
-			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_2, syscall_name, cst_entry);
+			ret = snprintf(macro_line_used, DIM, macro_line_2, syscall_name, cst_entry);
 			break;
 		case 3:
-			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_3, syscall_name, cst_entry);
+			ret = snprintf(macro_line_used, DIM, macro_line_3, syscall_name, cst_entry);
 			break;
 		case 4:
-			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_4, syscall_name, cst_entry);
+			ret = snprintf(macro_line_used, DIM, macro_line_4, syscall_name, cst_entry);
 			break;
 		case 5:
-			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_5, syscall_name, cst_entry);
+			ret = snprintf(macro_line_used, DIM, macro_line_5, syscall_name, cst_entry);
 			break;
 		case 6:
-			ret = vsnprinf(macro_line_used, PAGE_SIZE, macro_line_6, syscall_name, cst_entry);
+			ret = snprintf(macro_line_used, DIM, macro_line_6, syscall_name, cst_entry);
 			break;
 		default:
-			prink(KERN_ERR "%s: Invalid number parameter (%d)\n", MODNAME, num_parameters);
+			printk(KERN_ERR "%s: Invalid number parameter (%d)\n", MODNAME, num_parameters);
+			
+			kfree(macro_line_used);
+			kfree(syscall_name);
+			module_put(THIS_MODULE);
 			return -1;
 	}
 
 	if(ret <= 0){
-		prink(KERN_ERR "%s: snprintf failed, returning (%d)\n", MODNAME, ret);
+		printk(KERN_ERR "%s: snprintf failed, returning (%d)\n", MODNAME, ret);
 		
-		//MOD_DEC_USE_COUNT;
+		kfree(macro_line_used);
+		kfree(syscall_name);
+		module_put(THIS_MODULE);
 		return -1;
 	}
 
-	printk(KERN_DEBUG "%s-> kmalloc+vsnprintf: %s\n", MODNAME, macro_line_used);
-
 	//mutex lock
+
+	//adding entry in system call table
+	if((customsys_free_indx = update_syscalltable_entry(new_syscall)) == -1){
+		printk(KERN_ERR "%s: Free entry not found while adding %s\n", MODNAME, syscall_name);
+		
+		kfree(macro_line_used);
+		kfree(syscall_name);
+		module_put(THIS_MODULE);
+		return -1;
+	}
 
 	//inserting the line in the macro file
 
 	//update local arrays
+	if((syscall_names[total_syscall_added] = kmalloc(SYSCALL_NAME_MAX_LEN, GFP_KERNEL)) == NULL){
+		printk(KERN_ERR "%s: Unable to kmalloc temp\n", MODNAME);
+
+		module_put(THIS_MODULE);
+		kfree(syscall_name);
+		kfree(macro_line_used);
+		return -1;
+	}
+	//TODO memocpy -> syscall_names[total_syscall_added] to syscall_name
+	syscall_cts_numbers[total_syscall_added] = customsys_free_indx;
 
 	//mutex unlock
 
+	total_syscall_added++;
 	kfree(macro_line_used);
-	//MOD_DEC_USE_COUNT;
-
+	kfree(syscall_name);
+	module_put(THIS_MODULE);
 	return 0;
 }
 
