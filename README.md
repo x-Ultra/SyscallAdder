@@ -10,7 +10,19 @@ This module will add 2 system call:
 
 ## Usage
 
-In order to add a new system call do the following: [TODO]
+Fist of all you have to download and install the syscall_adder module:
+1. `git clone https://github.com/x-Ultra/SyscallAdder`
+2. `cd SyscallAdder`
+3. `sudo insmod syscalladder.ko`
+
+Then, to add a new system call:
+
+1. Open the new_syscall_template.c in 'syscall_template' folder
+2. Fill the 'your_custom_syscall' function with your system call logic
+3. Rename as you want: the preavious function name, the macro line '#DEFINE YOUR_SYSCALL_NAME'
+4. Rename the new_syscall_template.c file with the name of your system call **and** the line `obj-m += new_syscall_template.o` to `obj-m += renamed_c_file.o`
+
+To use you new systemcall just import the macro file `~/custom_syscall_macros.h` into your user C file.
 
 ## The MACRO file
 
