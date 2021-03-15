@@ -2,8 +2,12 @@
 #include <linux/kernel.h>
 #include <linux/kern_levels.h>
 #include <linux/kallsyms.h>
+//kmalloc declaration
 #include <linux/slab.h>
+//header  for kmalloc flags
 #include <linux/gfp.h>
+//mutex
+#include <linux/mutex.h>
 //stuff for reading/wrinting on file (via VFS)
 #include <linux/fs.h>
 #include <asm/segment.h>
@@ -42,16 +46,22 @@ MODULE_DESCRIPTION("This module will create a syscall that will be used \
 
 unsigned long sys_call_table_address = 0;
 unsigned long sysnisyscall_addr = 0;
+DEFINE_MUTEX(mod_mutex);
 
 //used to avoid ononimous
-char **syscall_names = {[0 ... NUM_ENTRIES] = 0};
-int **syscall_cts_numbers = {[0 ... NUM_ENTRIES] = 0};
+char *syscall_names[NUM_ENTRIES] = { [ 0 ... NUM_ENTRIES-1 ] = 0};
+int syscall_cts_numbers[NUM_ENTRIES] = { [ 0 ... NUM_ENTRIES-1 ] = 0};
 int total_syscall_added = 0;
 
-void update_macro_file(void)
+int insert_macro_line(int syscall_num, char *macro_line)
 {
 	//TODO
+
+
+
+	
 	printk(KERN_DEBUG "TODO create_header");
+	return 0;
 }
 
 
@@ -109,7 +119,6 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sys
 	char *macro_line_6 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5, arg6) syscall(%d, arg1, arg2, arg3, arg4, arg5, arg6)";
 	char *macro_line_used = NULL;
 	char *syscall_name = NULL;
-
 	
 	if(try_module_get(THIS_MODULE) == 0){
 		printk(KERN_ERR "%s: Module in use, try later\n", MODNAME);
@@ -180,12 +189,13 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sys
 		return -1;
 	}
 
-	//mutex lock
+	mutex_lock_interruptible(&mod_mutex);
 
 	//adding entry in system call table
 	if((customsys_free_indx = update_syscalltable_entry(new_syscall)) == -1){
 		printk(KERN_ERR "%s: Free entry not found while adding %s\n", MODNAME, syscall_name);
 		
+		mutex_unlock(&mod_mutex);
 		kfree(macro_line_used);
 		kfree(syscall_name);
 		module_put(THIS_MODULE);
@@ -193,21 +203,38 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sys
 	}
 
 	//inserting the line in the macro file
+	if(insert_macro_line(customsys_free_indx, macro_line_used) == -1){
+		printk(KERN_ERR "%s: Unable to insert macro line\n", MODNAME);
 
-	//update local arrays
-	if((syscall_names[total_syscall_added] = kmalloc(SYSCALL_NAME_MAX_LEN, GFP_KERNEL)) == NULL){
-		printk(KERN_ERR "%s: Unable to kmalloc temp\n", MODNAME);
-
+		mutex_unlock(&mod_mutex);
 		module_put(THIS_MODULE);
 		kfree(syscall_name);
 		kfree(macro_line_used);
 		return -1;
 	}
-	//TODO memocpy -> syscall_names[total_syscall_added] to syscall_name
+
+	//update local arrays
+	if((syscall_names[total_syscall_added] = kmalloc(SYSCALL_NAME_MAX_LEN, GFP_KERNEL)) == NULL){
+		printk(KERN_ERR "%s: Unable to kmalloc syscall_names\n", MODNAME);
+
+		mutex_unlock(&mod_mutex);
+		module_put(THIS_MODULE);
+		kfree(syscall_name);
+		kfree(macro_line_used);
+		return -1;
+	}
+	if(memcpy(syscall_names[total_syscall_added], syscall_name, SYSCALL_NAME_MAX_LEN) == NULL){
+		printk(KERN_ERR "%s: Unable to memcpy\n", MODNAME);
+
+		mutex_unlock(&mod_mutex);
+		module_put(THIS_MODULE);
+		kfree(syscall_name);
+		kfree(macro_line_used);
+		return -1;
+	}
 	syscall_cts_numbers[total_syscall_added] = customsys_free_indx;
 
-	//mutex unlock
-
+	mutex_unlock(&mod_mutex);
 	total_syscall_added++;
 	kfree(macro_line_used);
 	kfree(syscall_name);
@@ -261,7 +288,7 @@ static int __init install(void)
 		return -1;
 	}
 
-	//creating file header
+	//insert_macro_line for adder & remover
 
 	printk(KERN_DEBUG "%s: syscall_adder & syscall_remover added correctly\n", MODNAME);
 
@@ -270,9 +297,8 @@ static int __init install(void)
 
 static void __exit uninstall(void)
 {
-	//1. access the header
-	//2. extract the syscall adder and remover
-	//3. update the sys_call_table
+	//1. replace installed syscall in table, with sysni_syscall
+	//2. deleate header
 
 	printk("No operations needed to unload the module\n");
 
