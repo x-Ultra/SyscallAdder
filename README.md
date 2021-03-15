@@ -13,7 +13,8 @@ This module will add 2 system call:
 Fist of all you have to download and install the syscall_adder module:
 1. `git clone https://github.com/x-Ultra/SyscallAdder`
 2. `cd SyscallAdder`
-3. `sudo insmod syscalladder.ko`
+3. Edit `#define MACRO_DIR "dir/to/macro/file"` at line 35 of syscalladder.c
+4. `sudo insmod syscalladder.ko`
 
 Then, to add a new system call:
 
