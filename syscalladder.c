@@ -27,7 +27,7 @@
 #endif
 
 #define MODNAME "syscall_adder"
-#define NUM_ENTRIES 512
+#define NUM_ENTRIES 1024
 //This file will contain the macros that will be used to call
 //a custom syscall as if it was an 'embedded' one.
 //Eg. sys_call_adder("syscall_name") will be called inside the kernel module
@@ -56,6 +56,12 @@ char TEMP_MACROS_FILE[512];
 char *syscall_names[NUM_ENTRIES] = { [ 0 ... NUM_ENTRIES-1 ] = 0 };
 int syscall_cts_numbers[NUM_ENTRIES] = { [ 0 ... NUM_ENTRIES-1 ] = 0 };
 int total_syscall_added = 0;
+
+//Exporting functions to be usable 
+int syscall_adder(void* new_syscall, char *syscall_name_user, int sysname_len, int num_parameters);
+int syscall_remover(int syscall_entrynumber);
+EXPORT_SYMBOL(syscall_adder);
+EXPORT_SYMBOL(syscall_remover);
 
 int line_len(char *macro_line)
 {
@@ -119,9 +125,6 @@ int insert_macro_line(int syscall_num, char *macro_line)
 int remove_macro_line(int syscall_num)
 {
 
-	return 0;
-	//TODO
-
 	struct file *f, *f_new;
 	int MAX_MACRO_LEN = 2048;
 	char *temp_line;
@@ -161,6 +164,8 @@ int remove_macro_line(int syscall_num)
 		charinline_read++;
 
 		if(temp_line[charinline_read] == '\n'){
+
+			printk(KERN_DEBUG "%s: temp_line read: %s\n", MODNAME, temp_line);
 
 			if(line_to_skip_count == 0){
 				//copy the line and conutinue
@@ -202,8 +207,8 @@ int remove_macro_line(int syscall_num)
 	filp_close(f_new, NULL);
 	kfree(temp_line);
 
-	//remove old macro file
 	/*
+	//remove old macro file
 	if(sys_unlink(CUSTOM_SYSCALL_MACROS) == -1){
 		printk(KERN_ERR "%s: Unable to unlink old macro file\n", MODNAME);
 		return -1;
@@ -232,7 +237,9 @@ int find_syscalltable_free_entry(void)
 			break;
 		}
 	}
-
+	if(i == NUM_ENTRIES){
+		return -1;
+	}
 	return i;
 }
 
@@ -257,13 +264,13 @@ int update_syscalltable_entry(void* custom_syscall)
 }
 
 
-asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sysname_len, int cst_entry, int num_parameters)
+asmlinkage int syscall_adder(void* new_syscall, char *syscall_name, int sysname_len, int num_parameters)
 {
 	int ret;
 	//this should be the max length of the macro, but i'm lazy, 1PG should be ok.
 	int DIM = 4096;
 	int SYSCALL_NAME_MAX_LEN = 1024;
-	int customsys_free_indx;
+	int cst_entry;
 
 	//TODO check gor ononimous
 
@@ -275,34 +282,29 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sys
 	char *macro_line_5 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5) syscall(%d, arg1, arg2, arg3, arg4, arg5)\n";
 	char *macro_line_6 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5, arg6) syscall(%d, arg1, arg2, arg3, arg4, arg5, arg6)\n";
 	char *macro_line_used = NULL;
-	char *syscall_name = NULL;
+
+	printk(KERN_DEBUG "%s: ->sys name: -%s-\n", MODNAME, syscall_name);
 	
 	if(try_module_get(THIS_MODULE) == 0){
 		printk(KERN_ERR "%s: Module in use, try later\n", MODNAME);
 		return -1;
 	}
 	
-
-	if((syscall_name = kmalloc(SYSCALL_NAME_MAX_LEN, GFP_KERNEL)) == NULL){
-		printk(KERN_ERR "%s: Unable to kmalloc syscall_name\n", MODNAME);
-
+	mutex_lock_interruptible(&mod_mutex);
+	//adding entry in syscall table
+	cst_entry = update_syscalltable_entry(new_syscall);
+	if(cst_entry == -1){
+		printk(KERN_ERR "%s: Free entry not found while adding %s\n", MODNAME, syscall_name);
 		module_put(THIS_MODULE);
+		mutex_unlock(&mod_mutex);
 		return -1;
 	}
-
-	if(copy_from_user(syscall_name, syscall_name_user, sysname_len) != 0){
-		printk(KERN_ERR "%s: Unable to strncopy_from_user syscall_name\n", MODNAME);
-
-		module_put(THIS_MODULE);
-		return -1;
-	}
-	syscall_name[sysname_len] = '\0';
+	mutex_unlock(&mod_mutex);
 
 	if((macro_line_used = kmalloc(DIM, GFP_KERNEL)) == NULL){
 		printk(KERN_ERR "%s: Unable to kmalloc\n", MODNAME);
 
 		module_put(THIS_MODULE);
-		kfree(syscall_name);
 		return -1;
 	}
 
@@ -332,7 +334,6 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sys
 			printk(KERN_ERR "%s: Invalid number parameter (%d)\n", MODNAME, num_parameters);
 			
 			kfree(macro_line_used);
-			kfree(syscall_name);
 			module_put(THIS_MODULE);
 			return -1;
 	}
@@ -341,31 +342,18 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sys
 		printk(KERN_ERR "%s: snprintf failed, returning (%d)\n", MODNAME, ret);
 		
 		kfree(macro_line_used);
-		kfree(syscall_name);
 		module_put(THIS_MODULE);
 		return -1;
 	}
 
 	mutex_lock_interruptible(&mod_mutex);
 
-	//adding entry in system call table
-	if((customsys_free_indx = update_syscalltable_entry(new_syscall)) == -1){
-		printk(KERN_ERR "%s: Free entry not found while adding %s\n", MODNAME, syscall_name);
-		
-		mutex_unlock(&mod_mutex);
-		kfree(macro_line_used);
-		kfree(syscall_name);
-		module_put(THIS_MODULE);
-		return -1;
-	}
-
 	//inserting the line in the macro file
-	if(insert_macro_line(customsys_free_indx, macro_line_used) == -1){
+	if(insert_macro_line(cst_entry, macro_line_used) == -1){
 		printk(KERN_ERR "%s: Unable to insert macro line\n", MODNAME);
 
 		mutex_unlock(&mod_mutex);
 		module_put(THIS_MODULE);
-		kfree(syscall_name);
 		kfree(macro_line_used);
 		return -1;
 	}
@@ -376,7 +364,6 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sys
 
 		mutex_unlock(&mod_mutex);
 		module_put(THIS_MODULE);
-		kfree(syscall_name);
 		kfree(macro_line_used);
 		return -1;
 	}
@@ -385,24 +372,22 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name_user, int sys
 
 		mutex_unlock(&mod_mutex);
 		module_put(THIS_MODULE);
-		kfree(syscall_name);
 		kfree(macro_line_used);
 		return -1;
 	}
-	syscall_cts_numbers[total_syscall_added] = customsys_free_indx;
+	syscall_cts_numbers[total_syscall_added] = cst_entry;
 
 	mutex_unlock(&mod_mutex);
 	total_syscall_added++;
 	kfree(macro_line_used);
-	kfree(syscall_name);
 	module_put(THIS_MODULE);
 	return 0;
 }
 
 asmlinkage int syscall_remover(int syscall_entrynumber)
 {
-	int  last_syscall = syscall_cts_numbers[total_syscall_added];
-	char last_syscall_name[1024];
+	int i;
+	unsigned long cr0;
 
 	if(try_module_get(THIS_MODULE) == 0){
 		printk(KERN_ERR "%s: Module in use, try later\n", MODNAME);
@@ -411,6 +396,7 @@ asmlinkage int syscall_remover(int syscall_entrynumber)
 
 	mutex_lock_interruptible(&mod_mutex);
 
+	//updating macro file
 	if(remove_macro_line(syscall_entrynumber) == -1){
 		printk(KERN_ERR "%s: remove_macro_line returned -1\n", MODNAME);
 		mutex_unlock(&mod_mutex);
@@ -418,7 +404,8 @@ asmlinkage int syscall_remover(int syscall_entrynumber)
 		return -1;
 	}
 
-	for(int i = 0; i < total_syscall_added; ++i){
+	//uptading local arrays
+	for(i = 0; i < total_syscall_added; ++i){
 		if(syscall_cts_numbers[i] == syscall_entrynumber){
 			syscall_cts_numbers[i] = syscall_cts_numbers[total_syscall_added-1];
 			syscall_cts_numbers[total_syscall_added-1] = 0;
@@ -431,12 +418,19 @@ asmlinkage int syscall_remover(int syscall_entrynumber)
 		}
 	}
 
+	//fixing syscall table
+	cr0 = read_cr0();
+	write_cr0(cr0 & ~X86_CR0_WP);
+	((void **)sys_call_table_address)[syscall_entrynumber] = (void *)sysnisyscall_addr;
+	write_cr0(cr0);
+	//TODO remove after testing, seems OK
+	for(i = 0; i < total_syscall_added; ++i){
+		printk(KERN_DEBUG "%s: indx: %d, num: %d, name: %s\n", MODNAME, i, syscall_cts_numbers[i], syscall_names[i]);
+	}
 	
 	mutex_unlock(&mod_mutex);
 
 	module_put(THIS_MODULE);
-
-	printk("TODO");
 
 	return 0;
 }
