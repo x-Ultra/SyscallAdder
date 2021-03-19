@@ -38,10 +38,7 @@
 
 MODULE_AUTHOR("Ezio Emanuele Ditella");
 MODULE_DESCRIPTION("This module will create a syscall that will be used \
-					to add new syscalls. A new header file will be created \
-					and the header file has to be used BOTH in: \
-					1) Module where the syscall to insert is defined; \
-					2) User C file that will use that syscall.");
+					to add new syscalls.");
 
 
 unsigned long sys_call_table_address = 0;
@@ -53,6 +50,7 @@ char *syscall_names[NUM_ENTRIES] = { [ 0 ... NUM_ENTRIES-1 ] = 0 };
 int syscall_cts_numbers[NUM_ENTRIES] = { [ 0 ... NUM_ENTRIES-1 ] = 0 };
 int total_syscall_added = 0;
 int add_indx, rem_indx;
+int uninstalling = 0;
 
 //Exporting functions to be usable 
 int syscall_adder(void* new_syscall, char *syscall_name_user, int sysname_len, int num_parameters);
@@ -349,9 +347,11 @@ asmlinkage int syscall_remover(int syscall_entrynumber)
 	int i;
 	unsigned long cr0;
 
-	if(try_module_get(THIS_MODULE) == 0){
-		printk(KERN_ERR "%s: Module in use, try later\n", MODNAME_R);
-		return -1;
+	if(!uninstalling){
+		if(try_module_get(THIS_MODULE) == 0){
+			printk(KERN_ERR "%s: Module in use, try later\n", MODNAME_R);
+			return -1;
+		}
 	}
 
 	mutex_lock_interruptible(&mod_mutex);
@@ -388,7 +388,9 @@ asmlinkage int syscall_remover(int syscall_entrynumber)
 	
 	mutex_unlock(&mod_mutex);
 
-	module_put(THIS_MODULE);
+	if(!uninstalling){
+		module_put(THIS_MODULE);
+	}
 
 	printk(KERN_DEBUG "%s: Removed systemcall at indx %d \n", MODNAME_R, syscall_entrynumber);
 
@@ -465,6 +467,7 @@ static int __init install(void)
 static void __exit uninstall(void)
 {
 	int ret = 0;
+	uninstalling = 1;
 	if(syscall_remover(add_indx) == -1){
 		printk("Unable to remove syscall_adder\n");
 		ret = -1;
