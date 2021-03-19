@@ -1,0 +1,5 @@
+#! /bin/bash
+
+modname=$(find . -maxdepth 1 -name "*.c" | cut -d "/" -f 2 | cut -d "." -f 1)
+sudo rmmod $modname 
+make clean

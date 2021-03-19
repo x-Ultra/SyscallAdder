@@ -1,0 +1,11 @@
+#! /bin/bash
+
+if [ $# -ne 1 ];
+then
+	echo "Usage: ./uninstall <macro_file_directory>\n"
+	exit -1
+fi
+
+sudo rmmod syscalladder
+make clean
+sudo rm $1/custom_syscall_macros.h 

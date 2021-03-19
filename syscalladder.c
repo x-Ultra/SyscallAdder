@@ -27,17 +27,14 @@
 #endif
 
 #define MODNAME "syscall_adder"
+#define MODNAME_R "syscall_remover"
 #define NUM_ENTRIES 1024
 //This file will contain the macros that will be used to call
 //a custom syscall as if it was an 'embedded' one.
 //Eg. sys_call_adder("syscall_name") will be called inside the kernel module
 //that contains the new syscall to add. (TODO automate the process)
 #define MACRO_DIR "/home/ezio"
-#define TEMP_MACROS_FILE_RAW "%s/custom_syscall_macros_temp.h"
 #define CUSTOM_SYSCALL_MACROS_RAW "%s/custom_syscall_macros.h"
-#define MACRO_SYS_start "#%d"
-#define MACRO_SYS_end "#end"
-
 
 MODULE_AUTHOR("Ezio Emanuele Ditella");
 MODULE_DESCRIPTION("This module will create a syscall that will be used \
@@ -52,10 +49,10 @@ unsigned long sysnisyscall_addr = 0;
 DEFINE_MUTEX(mod_mutex);
 
 char CUSTOM_SYSCALL_MACROS[512];
-char TEMP_MACROS_FILE[512];
 char *syscall_names[NUM_ENTRIES] = { [ 0 ... NUM_ENTRIES-1 ] = 0 };
 int syscall_cts_numbers[NUM_ENTRIES] = { [ 0 ... NUM_ENTRIES-1 ] = 0 };
 int total_syscall_added = 0;
+int add_indx, rem_indx;
 
 //Exporting functions to be usable 
 int syscall_adder(void* new_syscall, char *syscall_name_user, int sysname_len, int num_parameters);
@@ -80,9 +77,9 @@ int insert_macro_line(int syscall_num, char *macro_line)
 {
 	int write_ret;
 	struct file *f;
-	char *line1raw = "#%d\n";
-	char *line3 = "#end\n";
-	char line1[6] = { [ 0 ... 5 ] = 0 };
+	char *line1raw = "//%d\n";
+	char *line3 = "//end\n";
+	char line1[7] = { [ 0 ... 6 ] = 0 };
     
 	//opening  macro file, creating if needed. (root permission, system readable)
 	f = filp_open(CUSTOM_SYSCALL_MACROS, O_CREAT|O_APPEND|O_RDWR, 0666);
@@ -91,7 +88,7 @@ int insert_macro_line(int syscall_num, char *macro_line)
 		return -1;
 	}
 
-	if(snprintf(line1, 6, line1raw, syscall_num) <= 0){
+	if(snprintf(line1, 7, line1raw, syscall_num) <= 0){
 		printk(KERN_ERR "%s: snprintf line1\n", MODNAME);
 		filp_close(f, NULL);
 		return -1;
@@ -122,24 +119,21 @@ int insert_macro_line(int syscall_num, char *macro_line)
 }
 
 
+//TODO, maybe later on...
 int remove_macro_line(int syscall_num)
 {
 
-	struct file *f, *f_new;
+	struct file *f;
 	int MAX_MACRO_LEN = 2048;
 	char *temp_line;
-	int read_ret, write_ret;
+	int read_ret;
 	int charinline_read = 0;
-	char *line_to_match_raw = "#%d\n";
+	char *line_to_match_raw = "//%d\n";
 	char line_to_match[5] = { [ 0 ... 4 ] = 0 };
 	int line_to_skip_count = 3;
 
 	f = filp_open(CUSTOM_SYSCALL_MACROS, O_RDWR, 0644);
 	if(IS_ERR(f)){
-		return -1;
-	}
-	f_new = filp_open(TEMP_MACROS_FILE, O_TRUNC|O_CREAT|O_RDWR, 0644);
-	if(IS_ERR(f_new)){
 		return -1;
 	}
 
@@ -148,7 +142,7 @@ int remove_macro_line(int syscall_num)
 	}
 
 	if((temp_line = kmalloc(MAX_MACRO_LEN, GFP_KERNEL)) == NULL){
-		printk(KERN_ERR "%s: Unable to kmalloc temp_line\n", MODNAME);
+		printk(KERN_ERR "%s: Unable to kmalloc temp_line\n", MODNAME_R);
 
 		return -1;
 	}
@@ -165,37 +159,28 @@ int remove_macro_line(int syscall_num)
 
 		if(temp_line[charinline_read] == '\n'){
 
-			printk(KERN_DEBUG "%s: temp_line read: %s\n", MODNAME, temp_line);
+			printk(KERN_DEBUG "%s: temp_line read: %s\n", MODNAME_R, temp_line);
 
+			//TODO buffer all the lines and the recopy them in the macrofile ?
 			if(line_to_skip_count == 0){
-				//copy the line and conutinue
-				write_ret = kernel_write(f_new, temp_line, charinline_read, (unsigned long long *)(f_new->f_pos));
-				if(write_ret <= 0){
-					return -1;
-				}
-
+				//buffer the line
 				charinline_read = 0;
 				continue;
 			}
 
 			if(line_to_skip_count < 3){
+				//skip the line
 				charinline_read = 0;
 				continue;
 			}
 
 			//if syscall to remove is found
 			if(strncmp(line_to_match, temp_line, 5) == 0){
-				//do not copy this line in the new file
-				//and the next 2 lines
+				//do not buffer the line
 				line_to_skip_count--;
 
 			}else{
-				//copy the line and conutinue
-				write_ret = kernel_write(f_new, temp_line, charinline_read, (unsigned long long *)(f_new->f_pos));
-				if(write_ret <= 0){
-					return -1;
-				}
-
+				//buffer the line
 				charinline_read = 0;
 				continue;
 			}	
@@ -204,22 +189,8 @@ int remove_macro_line(int syscall_num)
 	}
 
 	filp_close(f, NULL);
-	filp_close(f_new, NULL);
 	kfree(temp_line);
-
-	/*
-	//remove old macro file
-	if(sys_unlink(CUSTOM_SYSCALL_MACROS) == -1){
-		printk(KERN_ERR "%s: Unable to unlink old macro file\n", MODNAME);
-		return -1;
-	}
-
-	//rename new macro file
-	if(sys_link(TEMP_MACROS_FILE, CUSTOM_SYSCALL_MACROS) == -1){
-		printk(KERN_ERR "%s: Unable to rename new macro file\n", MODNAME);
-		return -1;
-	}
-	*/
+	//TODO, reopen the file in TRUNC mode and write the buffered lines ?
 
 	return 0;
 }
@@ -233,7 +204,6 @@ int find_syscalltable_free_entry(void)
 	for(i = 0; i < NUM_ENTRIES; i += 1){
 
 		if(temp_addr[i] == (void *)sysnisyscall_addr){
-			printk(KERN_DEBUG "Found free entry NR.%d\n", i);
 			break;
 		}
 	}
@@ -243,14 +213,15 @@ int find_syscalltable_free_entry(void)
 	return i;
 }
 
-int update_syscalltable_entry(void* custom_syscall)
+int update_syscalltable_entry(void* custom_syscall, char* syscall_name)
 {
 	int syst_entry;
 	unsigned long cr0;
+	int SYSCALL_NAME_MAX_LEN = 1024;
 
 	syst_entry = find_syscalltable_free_entry();
 	if(syst_entry == -1){
-		printk(KERN_DEBUG "Free entry not found\n");
+		printk(KERN_DEBUG "%s: Free entry not found\n", MODNAME);
 		return -1;
 	}
 	printk(KERN_DEBUG "%s: Index found: %d\n",MODNAME, syst_entry);
@@ -259,6 +230,18 @@ int update_syscalltable_entry(void* custom_syscall)
 	write_cr0(cr0 & ~X86_CR0_WP);
 	((void **)sys_call_table_address)[syst_entry] = custom_syscall;
 	write_cr0(cr0);
+
+	//update local arrays
+	if((syscall_names[total_syscall_added] = kmalloc(SYSCALL_NAME_MAX_LEN, GFP_KERNEL)) == NULL){
+		printk(KERN_ERR "%s: Unable to kmalloc syscall_names\n", MODNAME);
+		return -1;
+	}
+	if(memcpy(syscall_names[total_syscall_added], syscall_name, SYSCALL_NAME_MAX_LEN) == NULL){
+		printk(KERN_ERR "%s: Unable to memcpy\n", MODNAME);
+		return -1;
+	}
+	syscall_cts_numbers[total_syscall_added] = syst_entry;
+	total_syscall_added++;
 
 	return syst_entry;
 }
@@ -269,21 +252,18 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name, int sysname_
 	int ret;
 	//this should be the max length of the macro, but i'm lazy, 1PG should be ok.
 	int DIM = 4096;
-	int SYSCALL_NAME_MAX_LEN = 1024;
 	int cst_entry;
 
-	//TODO check gor ononimous
+	//TODO check for ononimous
 
-	char *macro_line_0 = "#DEFINE %s() syscall(%d)\n";
-	char *macro_line_1 = "#DEFINE %s(arg1) syscall(%d, arg1)\n";
-	char *macro_line_2 = "#DEFINE %s(arg1, arg2) syscall(%d, arg1, arg2)\n";
-	char *macro_line_3 = "#DEFINE %s(arg1, arg2, arg3) syscall(%d, arg1, arg2, arg3)\n";
-	char *macro_line_4 = "#DEFINE %s(arg1, arg2, arg3, arg4) syscall(%d, arg1, arg2, arg3, arg4)\n";
-	char *macro_line_5 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5) syscall(%d, arg1, arg2, arg3, arg4, arg5)\n";
-	char *macro_line_6 = "#DEFINE %s(arg1, arg2, arg3, arg4, arg5, arg6) syscall(%d, arg1, arg2, arg3, arg4, arg5, arg6)\n";
+	char *macro_line_0 = "#define %s() syscall(%d)\n";
+	char *macro_line_1 = "#define %s(arg1) syscall(%d, arg1)\n";
+	char *macro_line_2 = "#define %s(arg1, arg2) syscall(%d, arg1, arg2)\n";
+	char *macro_line_3 = "#define %s(arg1, arg2, arg3) syscall(%d, arg1, arg2, arg3)\n";
+	char *macro_line_4 = "#define %s(arg1, arg2, arg3, arg4) syscall(%d, arg1, arg2, arg3, arg4)\n";
+	char *macro_line_5 = "#define %s(arg1, arg2, arg3, arg4, arg5) syscall(%d, arg1, arg2, arg3, arg4, arg5)\n";
+	char *macro_line_6 = "#define %s(arg1, arg2, arg3, arg4, arg5, arg6) syscall(%d, arg1, arg2, arg3, arg4, arg5, arg6)\n";
 	char *macro_line_used = NULL;
-
-	printk(KERN_DEBUG "%s: ->sys name: -%s-\n", MODNAME, syscall_name);
 	
 	if(try_module_get(THIS_MODULE) == 0){
 		printk(KERN_ERR "%s: Module in use, try later\n", MODNAME);
@@ -292,7 +272,7 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name, int sysname_
 	
 	mutex_lock_interruptible(&mod_mutex);
 	//adding entry in syscall table
-	cst_entry = update_syscalltable_entry(new_syscall);
+	cst_entry = update_syscalltable_entry(new_syscall, syscall_name);
 	if(cst_entry == -1){
 		printk(KERN_ERR "%s: Free entry not found while adding %s\n", MODNAME, syscall_name);
 		module_put(THIS_MODULE);
@@ -347,7 +327,6 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name, int sysname_
 	}
 
 	mutex_lock_interruptible(&mod_mutex);
-
 	//inserting the line in the macro file
 	if(insert_macro_line(cst_entry, macro_line_used) == -1){
 		printk(KERN_ERR "%s: Unable to insert macro line\n", MODNAME);
@@ -357,31 +336,12 @@ asmlinkage int syscall_adder(void* new_syscall, char *syscall_name, int sysname_
 		kfree(macro_line_used);
 		return -1;
 	}
-
-	//update local arrays
-	if((syscall_names[total_syscall_added] = kmalloc(SYSCALL_NAME_MAX_LEN, GFP_KERNEL)) == NULL){
-		printk(KERN_ERR "%s: Unable to kmalloc syscall_names\n", MODNAME);
-
-		mutex_unlock(&mod_mutex);
-		module_put(THIS_MODULE);
-		kfree(macro_line_used);
-		return -1;
-	}
-	if(memcpy(syscall_names[total_syscall_added], syscall_name, SYSCALL_NAME_MAX_LEN) == NULL){
-		printk(KERN_ERR "%s: Unable to memcpy\n", MODNAME);
-
-		mutex_unlock(&mod_mutex);
-		module_put(THIS_MODULE);
-		kfree(macro_line_used);
-		return -1;
-	}
-	syscall_cts_numbers[total_syscall_added] = cst_entry;
-
 	mutex_unlock(&mod_mutex);
-	total_syscall_added++;
+
+
 	kfree(macro_line_used);
 	module_put(THIS_MODULE);
-	return 0;
+	return cst_entry;
 }
 
 asmlinkage int syscall_remover(int syscall_entrynumber)
@@ -390,19 +350,21 @@ asmlinkage int syscall_remover(int syscall_entrynumber)
 	unsigned long cr0;
 
 	if(try_module_get(THIS_MODULE) == 0){
-		printk(KERN_ERR "%s: Module in use, try later\n", MODNAME);
+		printk(KERN_ERR "%s: Module in use, try later\n", MODNAME_R);
 		return -1;
 	}
 
 	mutex_lock_interruptible(&mod_mutex);
 
-	//updating macro file
+	//updating macro file, not yet implemented
+	/*
 	if(remove_macro_line(syscall_entrynumber) == -1){
 		printk(KERN_ERR "%s: remove_macro_line returned -1\n", MODNAME);
 		mutex_unlock(&mod_mutex);
 		module_put(THIS_MODULE);
 		return -1;
 	}
+	*/
 
 	//uptading local arrays
 	for(i = 0; i < total_syscall_added; ++i){
@@ -423,14 +385,12 @@ asmlinkage int syscall_remover(int syscall_entrynumber)
 	write_cr0(cr0 & ~X86_CR0_WP);
 	((void **)sys_call_table_address)[syscall_entrynumber] = (void *)sysnisyscall_addr;
 	write_cr0(cr0);
-	//TODO remove after testing, seems OK
-	for(i = 0; i < total_syscall_added; ++i){
-		printk(KERN_DEBUG "%s: indx: %d, num: %d, name: %s\n", MODNAME, i, syscall_cts_numbers[i], syscall_names[i]);
-	}
 	
 	mutex_unlock(&mod_mutex);
 
 	module_put(THIS_MODULE);
+
+	printk(KERN_DEBUG "%s: Removed systemcall at indx %d \n", MODNAME_R, syscall_entrynumber);
 
 	return 0;
 }
@@ -443,17 +403,13 @@ static int __init install(void)
 	//when a new syscall has to be added, the header created has to be included,
 	//then call syscall(NR, void* syscall_toadd_definedinmodule), and the new
 	//entry will be inserted.
-	int add_indx, rem_indx;
-	char *adder_macro_line_raw = "#DEFINE syscall_remover(arg1) syscall(%d, arg1)\n";
-	char *remover_macro_line_raw = "#DEFINE syscall_adder(arg1, arg2, arg3, arg4, arg5) syscall(%d, arg1, arg2, arg3, arg4, arg5)\n";
+	char *adder_macro_line_raw = "#define syscall_remover(arg1) syscall(%d, arg1)\n";
+	char *remover_macro_line_raw = "#define syscall_adder(arg1, arg2, arg3, arg4, arg5) syscall(%d, arg1, arg2, arg3, arg4, arg5)\n";
 	char adder_macro_line[300] = { [ 0 ... 299 ] = 0 };
 	char remover_macro_line[512] = { [ 0 ... 511 ] = 0 };
 
 	//setting directory dir
 	if(snprintf(CUSTOM_SYSCALL_MACROS, 512, CUSTOM_SYSCALL_MACROS_RAW, MACRO_DIR) <= 0){
-		return -1;
-	}
-	if(snprintf(TEMP_MACROS_FILE, 512, TEMP_MACROS_FILE_RAW, MACRO_DIR) <= 0){
 		return -1;
 	}
 
@@ -472,13 +428,13 @@ static int __init install(void)
 	}
 
 	//adding sys adder
-	if((add_indx = update_syscalltable_entry(syscall_adder)) == -1){
+	if((add_indx = update_syscalltable_entry(syscall_adder, "syscall_adder")) == -1){
 		printk(KERN_DEBUG "%s: Syscall_adder not inserted\n", MODNAME);
 		return -1;
 	}
 
 	//adding sys remover
-	if((rem_indx = update_syscalltable_entry(syscall_remover)) == -1){
+	if((rem_indx = update_syscalltable_entry(syscall_remover, "syscall_remover")) == -1){
 		printk(KERN_DEBUG "%s: Syscall_remover not inserted\n", MODNAME);
 		return -1;
 	}
@@ -508,10 +464,20 @@ static int __init install(void)
 
 static void __exit uninstall(void)
 {
-	//1. replace installed syscall in table, with sysni_syscall
-	//2. delete header
+	int ret = 0;
+	if(syscall_remover(add_indx) == -1){
+		printk("Unable to remove syscall_adder\n");
+		ret = -1;
+	}
 
-	printk("No operations needed to unload the module\n");
+	if(syscall_remover(rem_indx) == -1){
+		printk("Unable to remove syscall_remover\n");
+		ret = -1;
+	}
+
+	if(ret != -1){
+		printk(KERN_DEBUG "Systemcalls removed correctly !\n");
+	}
 
 }
 

@@ -13,17 +13,20 @@ This module will add 2 system call:
 Fist of all you have to download and install the syscall_adder module:
 1. `git clone https://github.com/x-Ultra/SyscallAdder`
 2. `cd SyscallAdder`
-3. Edit `#define MACRO_DIR "dir/to/macro/file"` at line 35 of syscalladder.c
-4. `sudo insmod syscalladder.ko`
+3. Edit `#define MACRO_DIR "/dir/to/macro/file"` at line 35 of syscalladder.c
+4. `sudo ./install`
+5. To uninstall `sudo ./uninstall </dir/to/macro/file>`
 
 Then, to add a new system call:
 
-1. Open the new_syscall_template.c in 'syscall_template' folder
-2. Fill the 'your_custom_syscall' function with your system call logic
-3. Rename as you want: the preavious function name, the macro line '#DEFINE YOUR_SYSCALL_NAME'
-4. Rename the new_syscall_template.c file with the name of your system call **and** the line `obj-m += new_syscall_template.o` to `obj-m += renamed_c_file.o`
+1. Open the 'your_syscall.c' file in 'template' folder
+2. Edit the template as you need
+3. While adding a new syscall remember to use an integer variable to maintain the index of the added syscall (line 15), to use in the removing procedure.
+4. Rename the your_syscall.c as you want
+5. To install your module (and your system calls): `sudo ./insert_syscall`
+6. To remove: `sudo ./remove_syscall`
 
-To use you new systemcall just import the macro file `~/custom_syscall_macros.h` into your user C file.
+To use you new systemcall just import the macro file `/dir/to/macro/file/custom_syscall_macros.h` into your user C file.
 
 ## The MACRO file
 
@@ -31,9 +34,9 @@ Let's suppose to add the system call 'my_sys(int arg1)', and that the syscall\_a
 The macro file will look like that:
 
 ```C
-#187
+//187
 #DEFINE my_sys(arg1) syscall(187, arg1)
-#end
+//end
 ```
 
 This means that the syscall\_adder has to know the number of parameters in order to create the appropiate macro. That's it.
