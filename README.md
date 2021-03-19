@@ -35,7 +35,7 @@ The macro file will look like that:
 
 ```C
 //187
-#DEFINE my_sys(arg1) syscall(187, arg1)
+#define my_sys(arg1) syscall(187, arg1)
 //end
 ```
 
