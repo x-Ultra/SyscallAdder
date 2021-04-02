@@ -30,12 +30,12 @@ To use you new systemcall just import the macro file `/dir/to/macro/file/custom_
 
 ## The MACRO file
 
-Let's suppose to add the system call 'my_sys(int arg1)', and that the syscall\_adder will insert at in the (system call table) index 187.
+Let's suppose to add the system call 'my_sys(int arg1)', and let's suppose that the syscall\_adder will insert it in the (system call table) index 187.
 The macro file will look like that:
 
 ```C
 //187
-#DEFINE my_sys(arg1) syscall(187, arg1)
+#define my_sys(arg1) syscall(187, arg1)
 //end
 ```
 

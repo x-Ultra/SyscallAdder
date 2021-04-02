@@ -3,3 +3,4 @@
 
 make
 sudo insmod syscalladder.ko
+dmesg | tail | grep "syscall_adder"

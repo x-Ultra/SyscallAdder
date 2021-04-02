@@ -1,4 +1,3 @@
-
 obj-m += syscalladder.o
 
 all:
